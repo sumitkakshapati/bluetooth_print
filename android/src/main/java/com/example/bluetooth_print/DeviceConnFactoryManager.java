@@ -289,18 +289,18 @@ public class DeviceConnFactoryManager {
         }
     }
 
-    public void sendDataImmediately(final Vector<Byte> data) {
-        if (this.mPort == null) {
-            return;
-        }
-        try {
-            this.mPort.writeDataImmediately(data, 0, data.size());
-        } catch (Exception e) {//异常中断发送
-            mHandler.obtainMessage(Constant.abnormal_Disconnection).sendToTarget();
-//            e.printStackTrace();
-
-        }
-    }
+//    public void sendDataImmediately(final Vector<Byte> data) {
+//        if (this.mPort == null) {
+//            return;
+//        }
+//        try {
+//            this.mPort.writeDataImmediately(data, 0, data.size());
+//        } catch (Exception e) {//异常中断发送
+//            mHandler.obtainMessage(Constant.abnormal_Disconnection).sendToTarget();
+////            e.printStackTrace();
+//
+//        }
+//    }
 
     public void sendByteDataImmediately(final byte [] data) {
         if (this.mPort != null) {

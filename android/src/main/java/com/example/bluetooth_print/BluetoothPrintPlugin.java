@@ -461,6 +461,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   private void print(MethodCall call, Result result) {
     Map<String, Object> args = call.arguments();
 
+    CompletableFuture<Boolean> printCompleteFuture = new CompletableFuture<Boolean>();
     final DeviceConnFactoryManager deviceConnFactoryManager = DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(curMacAddress);
     if (deviceConnFactoryManager == null || !deviceConnFactoryManager.getConnState()) {
       result.error("not connect", "state not right", null);
@@ -481,14 +482,22 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
           PrinterCommand printerCommand = deviceConnFactoryManager.getCurrentPrinterCommand();
 
           if (printerCommand == PrinterCommand.ESC) {
-            deviceConnFactoryManager.sendDataImmediately(PrintContent.mapToReceipt(config, list));
+            deviceConnFactoryManager.sendDataImmediatelyWithException(PrintContent.mapToReceipt(config, list),printCompleteFuture);
           }else if (printerCommand == PrinterCommand.TSC) {
-            deviceConnFactoryManager.sendDataImmediately(PrintContent.mapToLabel(config, list));
+            deviceConnFactoryManager.sendDataImmediatelyWithException(PrintContent.mapToLabel(config, list),printCompleteFuture);
           }else if (printerCommand == PrinterCommand.CPCL) {
-            deviceConnFactoryManager.sendDataImmediately(PrintContent.mapToCPCL(config, list));
+            deviceConnFactoryManager.sendDataImmediatelyWithException(PrintContent.mapToCPCL(config, list),printCompleteFuture);
           }
         }
       });
+
+      printCompleteFuture.thenAccept(res -> {
+        result.success(res);
+      }).exceptionally(err -> {
+        result.error("Platform Exception", err.getMessage(), err.getCause());
+        return null;
+      });
+      printCompleteFuture.join();
     }else{
       result.error("please add config or data", "", null);
     }
