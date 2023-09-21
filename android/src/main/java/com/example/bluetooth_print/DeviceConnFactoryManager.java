@@ -1,6 +1,8 @@
 package com.example.bluetooth_print;
 
 import android.annotation.SuppressLint;
+import android.bluetooth.BluetoothClass;
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
@@ -14,9 +16,12 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Vector;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+
+import io.flutter.plugin.common.MethodChannel;
 
 /**
  * @author thon
@@ -138,39 +143,42 @@ public class DeviceConnFactoryManager {
     /**
      * 打开端口
      */
-    public void openPort() {
-        DeviceConnFactoryManager deviceConnFactoryManager = deviceConnFactoryManagers.get(macAddress);
-        if(deviceConnFactoryManager == null){
-            return;
-        }
-
-        deviceConnFactoryManager.isOpenPort = false;
-        if (deviceConnFactoryManager.connMethod == CONN_METHOD.BLUETOOTH) {
-            mPort = new BluetoothPort(macAddress);
-            isOpenPort = deviceConnFactoryManager.mPort.openPort();
-        }
-
-        //端口打开成功后，检查连接打印机所使用的打印机指令ESC、TSC
-        if (isOpenPort) {
-            queryCommand();
-        } else {
-            if (this.mPort != null) {
-                this.mPort=null;
+    public void openPort(CompletableFuture<Boolean> completerFuture) {
+            DeviceConnFactoryManager deviceConnFactoryManager = deviceConnFactoryManagers.get(macAddress);
+            if(deviceConnFactoryManager == null){
+                completerFuture.complete(false);
             }
 
-        }
+            deviceConnFactoryManager.isOpenPort = false;
+
+            BluetoothUtils.isPrinter(macAddress);
+            if (deviceConnFactoryManager.connMethod == CONN_METHOD.BLUETOOTH) {
+                mPort = new BluetoothPort(macAddress);
+                isOpenPort = deviceConnFactoryManager.mPort.openPort();
+            } else {
+                completerFuture.complete(false);
+            }
+
+            //After the port is opened successfully, check the printer command used to connect the printer ESC、TSC
+            if (isOpenPort) {
+                queryCommand(completerFuture);
+            } else {
+                if (this.mPort != null) {
+                    this.mPort=null;
+                }
+                completerFuture.complete(false);
+            }
     }
 
     /**
      * 查询当前连接打印机所使用打印机指令（ESC（EscCommand.java）、TSC（LabelCommand.java））
      */
-    private void queryCommand() {
-        //开启读取打印机返回数据线程
-        reader = new PrinterReader();
-        reader.start(); //读取数据线程
-        //查询打印机所使用指令
-        queryPrinterCommand(); //小票机连接不上  注释这行，添加下面那三行代码。使用ESC指令
-
+    private void queryCommand(CompletableFuture<Boolean> completableFuture) {
+        //Start reading the printer return data thread
+        reader = new PrinterReader(completableFuture);
+        reader.start(); //Read data thread
+        //Query the commands used by the printer
+        queryPrinterCommand(completableFuture); //The ticket machine cannot be connected. Comment this line and add the following three lines of code. Use ESC command
     }
 
     /**
@@ -266,6 +274,21 @@ public class DeviceConnFactoryManager {
         }
     }
 
+    public void sendDataImmediatelyWithException(final Vector<Byte> data,CompletableFuture<Boolean> completableFuture) {
+        if (this.mPort == null) {
+            completableFuture.complete(false);
+            return;
+        }
+        try {
+            this.mPort.writeDataImmediately(data, 0, data.size());
+            completableFuture.complete(true);
+        } catch (Exception e) {//Exception interrupt sending
+            completableFuture.completeExceptionally(e);
+            mHandler.obtainMessage(Constant.abnormal_Disconnection).sendToTarget();
+//            e.printStackTrace();
+        }
+    }
+
     public void sendDataImmediately(final Vector<Byte> data) {
         if (this.mPort == null) {
             return;
@@ -278,6 +301,7 @@ public class DeviceConnFactoryManager {
 
         }
     }
+
     public void sendByteDataImmediately(final byte [] data) {
         if (this.mPort != null) {
             Vector<Byte> datas = new Vector<Byte>();
@@ -291,15 +315,17 @@ public class DeviceConnFactoryManager {
             }
         }
     }
-    public int readDataImmediately(byte[] buffer){
+    public int readDataImmediately(byte[] buffer, CompletableFuture<Boolean> completableFuture){
         int r = 0;
         if (this.mPort == null) {
+            completableFuture.complete(false);
             return r;
         }
 
         try {
             r =  this.mPort.readData(buffer);
         } catch (IOException e) {
+            completableFuture.completeExceptionally(e);
             closePort();
         }
 
@@ -309,12 +335,12 @@ public class DeviceConnFactoryManager {
     /**
      * 查询打印机当前使用的指令（ESC、CPCL、TSC、）
      */
-    private void queryPrinterCommand() {
+    private void queryPrinterCommand(CompletableFuture<Boolean> completableFuture) {
         queryPrinterCommandFlag = ESC;
         ThreadPool.getInstantiation().addSerialTask(new Runnable() {
             @Override
             public void run() {
-                //开启计时器，隔2000毫秒没有没返回值时发送查询打印机状态指令，先发票据，面单，标签
+                //Start the timer, and send a query printer status command after 2000 milliseconds without returning a value. Invoices, face orders, and labels will be issued first.
                 final ThreadFactoryBuilder threadFactoryBuilder = new ThreadFactoryBuilder("Timer");
                 final ScheduledExecutorService scheduledExecutorService = new ScheduledThreadPoolExecutor(1, threadFactoryBuilder);
                 scheduledExecutorService.scheduleAtFixedRate(threadFactoryBuilder.newThread(new Runnable() {
@@ -327,12 +353,14 @@ public class DeviceConnFactoryManager {
                                 isOpenPort = false;
 
                                 scheduledExecutorService.shutdown();
+                                completableFuture.complete(false);
                             }
                         }
                         if (currentPrinterCommand != null) {
                             if (!scheduledExecutorService.isShutdown()) {
                                 scheduledExecutorService.shutdown();
                             }
+                            completableFuture.complete(false);
                             return;
                         }
                         switch (queryPrinterCommandFlag) {
@@ -355,7 +383,7 @@ public class DeviceConnFactoryManager {
                         for (byte b : sendCommand) {
                             data.add(b);
                         }
-                        sendDataImmediately(data);
+                        sendDataImmediatelyWithException(data,completableFuture);
                         queryPrinterCommandFlag++;
                     }
                 }), 1500, 1500, TimeUnit.MILLISECONDS);
@@ -367,7 +395,10 @@ public class DeviceConnFactoryManager {
         private boolean isRun = false;
         private final byte[] buffer = new byte[100];
 
-        public PrinterReader() {
+        CompletableFuture<Boolean> completableFuture;
+
+        public PrinterReader(CompletableFuture<Boolean> future) {
+            completableFuture = future;
             isRun = true;
         }
 
@@ -375,9 +406,9 @@ public class DeviceConnFactoryManager {
         public void run() {
             try {
                 while (isRun && mPort != null) {
-                    //读取打印机返回信息,打印机没有返回纸返回-1
+                    //Read the printer return information. If the printer does not return paper, it returns -1.
                     Log.e(TAG,"******************* wait read ");
-                    int len = readDataImmediately(buffer);
+                    int len = readDataImmediately(buffer, completableFuture);
                     Log.e(TAG,"******************* read "+len);
                     if (len > 0) {
                         Message message = Message.obtain();
@@ -389,7 +420,9 @@ public class DeviceConnFactoryManager {
                         mHandler.sendMessage(message);
                     }
                 }
-            } catch (Exception e) {//异常断开
+            } catch (Exception e) {//Abnormal disconnection
+                Log.e(TAG,"******************* read Abnormal Disconnect");
+                completableFuture.completeExceptionally(e);
                 if (deviceConnFactoryManagers.get(macAddress) != null) {
                     closePort();
                     mHandler.obtainMessage(Constant.abnormal_Disconnection).sendToTarget();

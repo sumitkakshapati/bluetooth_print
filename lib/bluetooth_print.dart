@@ -38,6 +38,15 @@ class BluetoothPrint {
   Future<bool?> get isConnected async =>
       await _channel.invokeMethod('isConnected');
 
+  Future<BluetoothDevice?> get connectedDevice async {
+    final res = await _channel.invokeMethod('connectedDevice');
+    if (res is Map && res.isNotEmpty) {
+      return BluetoothDevice.fromJson(Map<String, dynamic>.from(res));
+    } else {
+      return null;
+    }
+  }
+
   BehaviorSubject<bool> _isScanning = BehaviorSubject.seeded(false);
 
   Stream<bool> get isScanning => _isScanning.stream;

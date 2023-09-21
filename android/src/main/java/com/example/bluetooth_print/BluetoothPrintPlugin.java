@@ -1,9 +1,11 @@
 package com.example.bluetooth_print;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.Application;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothClass;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
@@ -16,10 +18,13 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.util.Log;
+
 import androidx.annotation.RequiresApi;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
 import com.gprinter.command.FactoryCommand;
+
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.embedding.engine.plugins.activity.ActivityAware;
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
@@ -35,6 +40,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * BluetoothPrintPlugin
@@ -46,7 +52,8 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   private Context context;
   private ThreadPool threadPool;
   private String curMacAddress;
-
+  private String currentDeviceName;
+  private int currentDeviceType;
   private static final String NAMESPACE = "bluetooth_print";
   private MethodChannel channel;
   private EventChannel stateChannel;
@@ -81,7 +88,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
     instance.setup(registrar.messenger(), application, activity, registrar, null);
   }
 
-  public BluetoothPrintPlugin(){
+  public BluetoothPrintPlugin() {
   }
 
 
@@ -170,7 +177,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
       return;
     }
 
-    switch (call.method){
+    switch (call.method) {
       case "state":
         state(result);
         break;
@@ -181,10 +188,12 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
         result.success(mBluetoothAdapter.isEnabled());
         break;
       case "isConnected":
-        result.success(threadPool != null);
+        result.success(curMacAddress != null);
         break;
-      case "startScan":
-      {
+      case "connectedDevice":
+        result.success(getCurrentConnectedDevice());
+        break;
+      case "startScan": {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
           ActivityCompat.requestPermissions(activityBinding.getActivity(), PERMISSIONS_LOCATION, REQUEST_FINE_LOCATION_PERMISSIONS);
           pendingCall = call;
@@ -203,7 +212,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
         connect(call, result);
         break;
       case "disconnect":
-        result.success(disconnect());
+        result.success(disconnect(true));
         break;
       case "destroy":
         result.success(destroy());
@@ -223,7 +232,20 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
   }
 
-  private void getDevices(Result result){
+  private Map getCurrentConnectedDevice() {
+    if (curMacAddress == null || currentDeviceName == null || currentDeviceType == -1) {
+      return null;
+    } else {
+      Map<String, Object> ret = new HashMap<>();
+      ret.put("address", curMacAddress);
+      ret.put("name", currentDeviceName);
+      ret.put("type", currentDeviceType);
+      return ret;
+    }
+  }
+
+  @SuppressLint("MissingPermission")
+  private void getDevices(Result result) {
     List<Map<String, Object>> devices = new ArrayList<>();
     for (BluetoothDevice device : mBluetoothAdapter.getBondedDevices()) {
       Map<String, Object> ret = new HashMap<>();
@@ -239,9 +261,9 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   /**
    * 获取状态
    */
-  private void state(Result result){
+  private void state(Result result) {
     try {
-      switch(mBluetoothAdapter.getState()) {
+      switch (mBluetoothAdapter.getState()) {
         case BluetoothAdapter.STATE_OFF:
           result.success(BluetoothAdapter.STATE_OFF);
           break;
@@ -266,7 +288,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
 
   private void startScan(MethodCall call, Result result) {
-    Log.d(TAG,"start scan ");
+    Log.d(TAG, "start scan ");
 
     try {
       startScan();
@@ -276,8 +298,8 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
     }
   }
 
-  private void invokeMethodUIThread(final String name, final BluetoothDevice device)
-  {
+  @SuppressLint("MissingPermission")
+  private void invokeMethodUIThread(final String name, final BluetoothDevice device) {
     final Map<String, Object> ret = new HashMap<>();
     ret.put("address", device.getAddress());
     ret.put("name", device.getName());
@@ -293,18 +315,20 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   }
 
   private ScanCallback mScanCallback = new ScanCallback() {
+    @SuppressLint("MissingPermission")
     @Override
     public void onScanResult(int callbackType, ScanResult result) {
       BluetoothDevice device = result.getDevice();
-      if(device != null && device.getName() != null){
+      if (device != null && device.getName() != null) {
         invokeMethodUIThread("ScanResult", device);
       }
     }
   };
 
+  @SuppressLint("MissingPermission")
   private void startScan() throws IllegalStateException {
     BluetoothLeScanner scanner = mBluetoothAdapter.getBluetoothLeScanner();
-    if(scanner == null) {
+    if (scanner == null) {
       throw new IllegalStateException("getBluetoothLeScanner() is null. Is the Adapter on?");
     }
 
@@ -313,6 +337,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
     scanner.startScan(null, settings, mScanCallback);
   }
 
+  @SuppressLint("MissingPermission")
   private void stopScan() {
     BluetoothLeScanner scanner = mBluetoothAdapter.getBluetoothLeScanner();
     if(scanner != null) {
@@ -328,8 +353,19 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
     if (args !=null && args.containsKey("address")) {
       final String address = (String) args.get("address");
       this.curMacAddress = address;
+      this.currentDeviceName = (String) args.get("name");
+      this.currentDeviceType = (int) args.get("type");
+      disconnect(false);
 
-      disconnect();
+      if(BluetoothUtils.isPrinter(curMacAddress) == false){
+        result.error("Bluetooth Print","Unable to connect","You can only connect to printer");
+        this.curMacAddress = null;
+        this.currentDeviceName = null;
+        this.currentDeviceType = -1;
+        return ;
+      }
+
+      CompletableFuture<Boolean> completableFuture = new CompletableFuture<Boolean>();
 
       new DeviceConnFactoryManager.Build()
               //设置连接方式
@@ -343,28 +379,44 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
       threadPool.addSerialTask(new Runnable() {
         @Override
         public void run() {
-          DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(address).openPort();
+            DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(address).openPort(completableFuture);
         }
       });
 
-      result.success(true);
+      completableFuture.thenAccept(res -> {
+        if(res ==false){
+          disconnect(true);
+        }
+        result.success(res);
+      }).exceptionally(err -> {
+        result.error("Platform Exception", err.getMessage(), err.getCause());
+        disconnect(true);
+        return null;
+      });
+      completableFuture.join();
     } else {
+      disconnect(true);
       result.error("******************* invalid_argument", "argument 'address' not found", null);
     }
-
   }
 
   /**
    * 关闭连接
    */
-  private boolean disconnect(){
-    DeviceConnFactoryManager deviceConnFactoryManager = DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(curMacAddress);
-    if(deviceConnFactoryManager != null && deviceConnFactoryManager.mPort != null) {
-      deviceConnFactoryManager.reader.cancel();
-      deviceConnFactoryManager.closePort();
-      deviceConnFactoryManager.mPort = null;
+  private boolean disconnect(Boolean clear){
+    if(curMacAddress != null){
+      DeviceConnFactoryManager deviceConnFactoryManager = DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(curMacAddress);
+      if(deviceConnFactoryManager != null && deviceConnFactoryManager.mPort != null) {
+        deviceConnFactoryManager.reader.cancel();
+        deviceConnFactoryManager.closePort();
+        deviceConnFactoryManager.mPort = null;
+      }
+      if(clear){
+        this.curMacAddress = null;
+        this.currentDeviceName = null;
+        this.currentDeviceType = -1;
+      }
     }
-
     return true;
   }
 
@@ -374,6 +426,9 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
       threadPool.stopThreadPool();
     }
 
+    this.curMacAddress = null;
+    this.currentDeviceName = null;
+    this.currentDeviceType = -1;
     return true;
   }
 
